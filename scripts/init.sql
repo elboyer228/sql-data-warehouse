@@ -8,6 +8,7 @@ CREATE DATABASE datawarehouse;
 
 \connect datawarehouse
 
-CREATE SCHEMA staging;
+CREATE SCHEMA bronze;
 CREATE SCHEMA silver;
 CREATE SCHEMA gold;
+
