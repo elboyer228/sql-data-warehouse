@@ -16,6 +16,7 @@ CREATE TABLE silver.crm_cust_info (
 DROP TABLE IF EXISTS silver.crm_prd_info;
 CREATE TABLE silver.crm_prd_info (
     prd_id INT,
+    cat_id VARCHAR(50),
     prd_key VARCHAR(50),
     prd_nm VARCHAR(50),
     prd_cost INT,
@@ -30,9 +31,9 @@ CREATE TABLE silver.crm_sales_details (
    sls_ord_num VARCHAR(50),
    sls_prd_key VARCHAR(50),
    sls_cust_id INT,
-   sls_order_dt INT,
-   sls_ship_dt INT,
-   sls_due_dt INT,
+   sls_order_dt DATE,
+   sls_ship_dt DATE,
+   sls_due_dt DATE,
    sls_sales INT,
    sls_quantity INT,
    sls_price INT,
@@ -115,6 +116,134 @@ FROM (
 
 
 
--- CRM PRODUCT INFO TABLE
+-- CRM PRODUCT INFO TABLE ------------------------------------------------------------
+
+
+-- Check duplicate or null of primary key
+SELECT prd_id, COUNT(*) FROM bronze.crm_prd_info GROUP BY prd_id HAVING COUNT(*) >1 or prd_id = NULL;
+
+-- Insert into silver.crm_prd_info table
+INSERT INTO silver.crm_prd_info(prd_id, cat_id, prd_key, prd_nm, prd_cost, prd_line, prd_start_dt, prd_end_dt)
+SELECT 
+    prd_id, 
+    REPLACE(SUBSTRING(prd_key, 1, 5), '-', '_') AS cat_id, -- can be used to join with erp_px_cat_g1v2 table
+    SUBSTRING(prd_key, 7, LENGTH(prd_key)) AS prd_key, -- can be used to join with crm_sales_details table
+    prd_nm, 
+    coalesce(prd_cost, 0) AS prd_cost, 
+    CASE WHEN UPPER(TRIM(prd_line))='M' then 'Mountain'
+        WHEN UPPER(TRIM(prd_line))='R' then 'Road'
+        WHEN UPPER(TRIM(prd_line))='T' then 'Touring'
+        WHEN UPPER(TRIM(prd_line))='S' then 'Other Sales'
+        ELSE 'n/a' 
+    END AS prd_line_type,
+    CAST(prd_start_dt AS DATE) as prd_start_dt, 
+    CAST(LEAD(prd_start_dt) OVER (PARTITION BY prd_key ORDER BY prd_start_dt)-1 AS DATE) as prd_end_dt 
+FROM bronze.crm_prd_info;
+
+
+-- WHERE SUBSTRING(prd_key, 7, LENGTH(prd_key)) NOT IN (SELECT sls_prd_key FROM bronze.crm_sales_details);
+-- WHERE REPLACE(SUBSTRING(prd_key, 1, 5), '-', '_') NOT IN (SELECT distinct id from bronze.erp_px_cat_g1v2);
+
+-- Check for null or negative values in prd_cost
+SELECT prd_cost from bronze.crm_prd_info WHERE prd_cost IS NULL or prd_cost < 0;
+
+-- Check for invalid dates in prd_start_dt and prd_end_dt
+SELECT * from bronze.crm_prd_info WHERE prd_start_dt IS NULL or prd_end_dt IS NULL or prd_start_dt > prd_end_dt;
+-- We do have issues with some dates (end before start and overlapping dates)
 
 SELECT 
+prd_id, 
+prd_key, 
+prd_nm, 
+prd_cost, 
+prd_line, 
+prd_start_dt, 
+prd_end_dt, 
+LEAD(prd_start_dt) OVER (PARTITION BY prd_key ORDER BY prd_start_dt)-1 as next_prd_start_dt
+FROM bronze.crm_prd_info 
+WHERE prd_key IN ('AC-HE-HL-U509-R', 'AC-HE-HL-U509');
+
+
+
+
+
+
+-- CRM SALES DETAILS TABLE ------------------------------------------------------------
+INSERT INTO silver.crm_sales_details(sls_ord_num, sls_prd_key, sls_cust_id, sls_order_dt, sls_ship_dt, sls_due_dt, sls_quantity, sls_sales, sls_price)
+SELECT 
+    sls_ord_num, 
+    sls_prd_key, 
+    sls_cust_id, 
+        CASE WHEN sls_order_dt = 0 OR LENGTH(sls_order_dt::text) <> 8 THEN NULL 
+        ELSE to_date(sls_order_dt::text, 'YYYYMMDD')
+    END AS sls_order_dt,
+        CASE WHEN sls_ship_dt = 0 OR LENGTH(sls_ship_dt::text) <> 8 THEN NULL 
+        ELSE to_date(sls_ship_dt::text, 'YYYYMMDD')
+    END AS sls_ship_dt,
+        CASE WHEN sls_due_dt = 0 OR LENGTH(sls_due_dt::text) <> 8 THEN NULL 
+        ELSE to_date(sls_due_dt::text, 'YYYYMMDD')
+    END AS sls_due_dt, 
+    sls_quantity, 
+    CASE WHEN sls_sales IS NULL OR sls_sales <= 0 OR sls_sales != sls_quantity * ABS(sls_price) THEN sls_quantity * ABS(sls_price) 
+        ELSE sls_sales 
+        END AS sls_sales,
+    CASE WHEN sls_price IS NULL OR sls_price <= 0 THEN sls_sales / NULLIF(sls_quantity, 0)
+        ELSE sls_price 
+        END AS sls_price
+FROM bronze.crm_sales_details;
+
+
+
+SELECT * FROM bronze.crm_sales_details WHERE sls_ord_num IS NULL OR sls_ord_num != TRIM(sls_ord_num);
+
+SELECT * FROM bronze.crm_sales_details WHERE sls_prd_key NOT IN (SELECT prd_key FROM silver.crm_prd_info); -- 0 rows 
+SELECT * FROM bronze.crm_sales_details WHERE sls_cust_id NOT IN (SELECT cst_id FROM silver.crm_cust_info); -- 0 rows
+
+-- Change INT TO DATE for sls_order_dt, sls_ship_dt, sls_due_dt
+
+SELECT NULLIF(sls_order_dt, 0) AS sls_order_dt FROM bronze.crm_sales_details WHERE sls_order_dt <= 0; -- Change 0 rows to NULL values 
+SELECT sls_order_dt FROM bronze.crm_sales_details WHERE LENGTH(sls_order_dt::text) <> 8; -- Check correct format of date
+SELECT sls_order_dt FROM bronze.crm_sales_details WHERE sls_order_dt > 20250101 OR sls_order_dt < 19000101; -- Check maximum date
+
+-- Check order date smaller than ship date
+SELECT * FROM bronze.crm_sales_details WHERE sls_order_dt > sls_ship_dt OR sls_order_dt > sls_due_dt; -- 0 rows
+
+-- Check sls_sales, sls_quantity, sls_price
+SELECT DISTINCT sls_sales, sls_quantity, sls_price 
+FROM bronze.crm_sales_details 
+WHERE sls_sales != sls_quantity * sls_price
+OR sls_sales IS NULL OR sls_quantity IS NULL OR sls_price IS NULL
+ORDER BY sls_sales, sls_quantity, sls_price; 
+
+-- Here both sls_sales and sls_price are bad quality data, so we need to either talk to the buisness/source system owner to fix the data or we need to fix it ouselves based on rules we fix. 
+-- Let's fix it ourselves based on rules we find.
+-- If Sales is negative, zero or null, derive it using quantity and price
+-- If Price is zero or null, derive it using quantity and sales
+-- If Price is negative, convert it to positive value 
+
+
+SELECT sls_quantity, sls_price, sls_sales,
+        CASE WHEN sls_sales IS NULL OR sls_sales <= 0 OR sls_sales != sls_quantity * ABS(sls_price) THEN sls_quantity * ABS(sls_price) 
+        ELSE sls_sales 
+        END AS corrected_sls_sales
+FROM bronze.crm_sales_details
+WHERE sls_sales IS NULL OR sls_sales <= 0 OR sls_sales != sls_quantity * ABS(sls_price);
+
+
+SELECT 
+ sls_sales as old_sls_sales,
+    sls_quantity, 
+    sls_price as old_sls_price,
+    CASE WHEN sls_sales IS NULL OR sls_sales <= 0 OR sls_sales != sls_quantity * ABS(sls_price) THEN sls_quantity * ABS(sls_price) 
+        ELSE sls_sales 
+        END AS sls_sales,
+    CASE WHEN sls_price IS NULL OR sls_price <= 0 THEN sls_sales / NULLIF(sls_quantity, 0)
+        ELSE sls_price 
+        END AS sls_price
+FROM bronze.crm_sales_details
+WHERE sls_sales IS NULL OR sls_sales <= 0 OR sls_sales != sls_quantity * ABS(sls_price)
+ORDER BY sls_sales;
+
+
+
+----
