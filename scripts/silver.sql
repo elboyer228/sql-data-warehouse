@@ -246,4 +246,73 @@ ORDER BY sls_sales;
 
 
 
-----
+---- ERP CUSTOMER TABLE ------------------------------------------------------------
+INSERT INTO silver.erp_cust_az12(cid, bdate, gen)
+SELECT 
+    CASE WHEN cid like 'NAS%' 
+        THEN SUBSTRING(cid, 4, LENGTH(cid)) 
+        ELSE cid 
+    END AS cid,
+    CASE WHEN bdate > CURRENT_TIMESTAMP THEN NULL
+        ELSE bdate
+    END AS bdate,
+    CASE WHEN UPPER(TRIM(gen)) IN ('F', 'FEMALE') THEN 'Female' 
+         WHEN UPPER(TRIM(gen)) IN ('M', 'MALE') THEN 'Male' 
+         ELSE 'n/a' 
+         END AS gen
+FROM bronze.erp_cust_az12;
+
+SELECT * FROM silver.crm_cust_info; -- Cid can be join on cst_key, need to remove NAS 
+
+
+SELECT
+    cid,
+    bdate,
+    gen
+FROM (
+    SELECT
+        CASE
+            WHEN cid LIKE 'NAS%' THEN SUBSTRING(cid, 4)
+            ELSE cid
+        END AS cid,
+        bdate,
+        gen
+    FROM bronze.erp_cust_az12
+)
+WHERE cid NOT IN (
+    SELECT DISTINCT cst_key
+    FROM silver.crm_cust_info
+);
+
+-- Check for range of dates in bdate
+SELECT MIN(bdate), MAX(bdate) FROM bronze.erp_cust_az12; -- 1916-02-10 | 9999-11-20
+SELECT bdate FROM bronze.erp_cust_az12 WHERE bdate > CURRENT_TIMESTAMP;
+
+SELECT DISTINCT gen FROM bronze.erp_cust_az12; -- F, M, n/a, Male and Female -> bad quality data 
+SELECT DISTINCT 
+       gen , 
+       CASE WHEN UPPER(TRIM(gen)) IN ('F', 'FEMALE') THEN 'Female' 
+            WHEN UPPER(TRIM(gen)) IN ('M', 'MALE') THEN 'Male' 
+            ELSE 'n/a' 
+            END AS standardized_gen
+FROM bronze.erp_cust_az12;
+
+
+
+-- ERP LOCATION TABLE ------------------------------------------------------------
+
+SELECT * FROM bronze.erp_loc_a101; -- Cid can be join on cst_key, need to remove '-'
+SELECT REPLACE(cid, '-', '') AS cid FROM bronze.erp_loc_a101 WHERE REPLACE(cid, '-', '') NOT IN (SELECT cst_key FROM silver.crm_cust_info); -- No unmatching data between both table
+
+SELECT DISTINCT cntry FROM bronze.erp_loc_a101 ORDER BY cntry; -- Mix of countries names (US, USA, United States), need to standardize
+SELECT DISTINCT cntry, CASE WHEN TRIM(cntry) = 'DE' THEN 'Germany' WHEN  TRIM(cntry) IN ('US', 'USA') THEN 'United States' WHEN TRIM(cntry) = '' OR cntry IS NULL THEN 'n/a' ELSE cntry END AS standardized_cntry
+FROM bronze.erp_loc_a101;
+
+INSERT INTO silver.erp_loc_a101(cid, cntry)
+SELECT
+    REPLACE(cid, '-', '') AS cid,
+    CASE WHEN TRIM(cntry) = 'DE' THEN 'Germany' WHEN  TRIM(cntry) IN ('US', 'USA') THEN 'United States' WHEN TRIM(cntry) = '' OR cntry IS NULL THEN 'n/a' ELSE cntry END AS standardized_cntry
+FROM bronze.erp_loc_a101;
+
+-- ERP PRODUCT CATEGORY TABLE ------------------------------------------------------------
+
