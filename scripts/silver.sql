@@ -66,9 +66,9 @@ CREATE TABLE silver.erp_px_cat_g1v2 (
     dwh_created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- QUALITY CHECKS OF BRONZE TABLES AND TRANSFORMATIONS INTO SILVER TABLES
+-- QUALITY CHECKS OF BRONZE TABLES AND TRANSFORMATIONS INTO SILVER TABLES --------------------------------------------------------------------------------------------------------------------------------------
 
--- CRM CUSTOMER INFO TABLE
+-- CRM CUSTOMER INFO TABLE --------------------------------------------------------------------------------------------------------------------------------------
 -- Check for duplicate primary keys
 SELECT cst_id, COUNT(*) FROM bronze.crm_cust_info GROUP BY cst_id HAVING COUNT(*) > 1 OR cst_id IS NULL;
 
@@ -92,6 +92,7 @@ SELECT DISTINCT cst_marital_status FROM bronze.crm_cust_info;
 
 
 -- FINAL SILVER TABLES
+TRUNCATE TABLE silver.crm_cust_info;
 INSERT INTO silver.crm_cust_info(cst_id, cst_key, cst_firstname, cst_lastname, cst_marital_status, cst_gndr, cst_create_date)
 SELECT 
 cst_id, 
@@ -116,13 +117,12 @@ FROM (
 
 
 
--- CRM PRODUCT INFO TABLE ------------------------------------------------------------
-
-
+-- CRM PRODUCT INFO TABLE --------------------------------------------------------------------------------------------------------------------------------------
 -- Check duplicate or null of primary key
 SELECT prd_id, COUNT(*) FROM bronze.crm_prd_info GROUP BY prd_id HAVING COUNT(*) >1 or prd_id = NULL;
 
 -- Insert into silver.crm_prd_info table
+TRUNCATE TABLE silver.crm_prd_info;
 INSERT INTO silver.crm_prd_info(prd_id, cat_id, prd_key, prd_nm, prd_cost, prd_line, prd_start_dt, prd_end_dt)
 SELECT 
     prd_id, 
@@ -168,7 +168,9 @@ WHERE prd_key IN ('AC-HE-HL-U509-R', 'AC-HE-HL-U509');
 
 
 
--- CRM SALES DETAILS TABLE ------------------------------------------------------------
+-- CRM SALES DETAILS TABLE --------------------------------------------------------------------------------------------------------------------------------------
+
+TRUNCATE TABLE silver.crm_sales_details;
 INSERT INTO silver.crm_sales_details(sls_ord_num, sls_prd_key, sls_cust_id, sls_order_dt, sls_ship_dt, sls_due_dt, sls_quantity, sls_sales, sls_price)
 SELECT 
     sls_ord_num, 
@@ -246,7 +248,8 @@ ORDER BY sls_sales;
 
 
 
----- ERP CUSTOMER TABLE ------------------------------------------------------------
+---- ERP CUSTOMER TABLE --------------------------------------------------------------------------------------------------------------------------------------
+TRUNCATE TABLE silver.erp_cust_az12;
 INSERT INTO silver.erp_cust_az12(cid, bdate, gen)
 SELECT 
     CASE WHEN cid like 'NAS%' 
@@ -299,7 +302,7 @@ FROM bronze.erp_cust_az12;
 
 
 
--- ERP LOCATION TABLE ------------------------------------------------------------
+-- ERP LOCATION TABLE --------------------------------------------------------------------------------------------------------------------------------------
 
 SELECT * FROM bronze.erp_loc_a101; -- Cid can be join on cst_key, need to remove '-'
 SELECT REPLACE(cid, '-', '') AS cid FROM bronze.erp_loc_a101 WHERE REPLACE(cid, '-', '') NOT IN (SELECT cst_key FROM silver.crm_cust_info); -- No unmatching data between both table
@@ -308,11 +311,24 @@ SELECT DISTINCT cntry FROM bronze.erp_loc_a101 ORDER BY cntry; -- Mix of countri
 SELECT DISTINCT cntry, CASE WHEN TRIM(cntry) = 'DE' THEN 'Germany' WHEN  TRIM(cntry) IN ('US', 'USA') THEN 'United States' WHEN TRIM(cntry) = '' OR cntry IS NULL THEN 'n/a' ELSE cntry END AS standardized_cntry
 FROM bronze.erp_loc_a101;
 
+TRUNCATE TABLE silver.erp_loc_a101;
 INSERT INTO silver.erp_loc_a101(cid, cntry)
 SELECT
     REPLACE(cid, '-', '') AS cid,
     CASE WHEN TRIM(cntry) = 'DE' THEN 'Germany' WHEN  TRIM(cntry) IN ('US', 'USA') THEN 'United States' WHEN TRIM(cntry) = '' OR cntry IS NULL THEN 'n/a' ELSE cntry END AS standardized_cntry
 FROM bronze.erp_loc_a101;
 
--- ERP PRODUCT CATEGORY TABLE ------------------------------------------------------------
+-- ERP PRODUCT CATEGORY TABLE --------------------------------------------------------------------------------------------------------------------------------------
 
+SELECT * FROM bronze.erp_px_cat_g1v2; -- Id can be join on cat_id added from prd_key in crm_prd_info table
+SELECT cat FROM bronze.erp_px_cat_g1v2 WHERE cat != TRIM(cat) OR subcat != TRIM(subcat) OR maintenance != TRIM(maintenance); -- No unwanted spaces in String Variables 
+
+SELECT DISTINCT cat FROM bronze.erp_px_cat_g1v2 ORDER BY cat; 
+SELECT DISTINCT subcat FROM bronze.erp_px_cat_g1v2 ORDER BY subcat; 
+SELECT DISTINCT maintenance FROM bronze.erp_px_cat_g1v2 ORDER BY maintenance; 
+
+
+TRUNCATE TABLE silver.erp_px_cat_g1v2;
+INSERT INTO silver.erp_px_cat_g1v2(id, cat, subcat, maintenance)
+SELECT id, cat, subcat, maintenance
+FROM bronze.erp_px_cat_g1v2;
